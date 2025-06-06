@@ -5,20 +5,17 @@ import random
 import gensim.downloader as api
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-import spacy
 from functools import lru_cache
 import json
 from nltk.stem import WordNetLemmatizer
+import nltk
 
 # ================================
 # Load NLP & Embeddings
 # ================================
-print("Loading spaCy model...")
-try:
-    nlp = spacy.load("en_core_web_sm")
-except OSError:
-    spacy.cli.download("en_core_web_sm")
-    nlp = spacy.load("en_core_web_sm")
+
+print("Downloading NLTK WordNet...")
+nltk.download('wordnet')
 
 print("Loading GloVe Twitter embeddings...")
 model = api.load("glove-twitter-25")
