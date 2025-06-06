@@ -8,6 +8,7 @@ import numpy as np
 import spacy
 from functools import lru_cache
 import json
+from nltk.stem import WordNetLemmatizer
 
 # ================================
 # Load NLP & Embeddings
@@ -31,9 +32,13 @@ with open("words.json", "r") as f:
 # ================================
 # Utils
 # ================================
+
+lemmatizer = WordNetLemmatizer()
+
 def lemmatize(word: str) -> str:
-    doc = nlp(word)
-    return doc[0].lemma_ if doc else word
+    word = word.lower()
+    lemma = lemmatizer.lemmatize(word, pos='n')  # noun-only lemmatization
+    return lemma
 
 def get_vector(word: str):
     try:
@@ -46,7 +51,7 @@ def similarity_score(w1: str, w2: str):
     v2 = get_vector(w2)
     if v1 is None or v2 is None:
         return None
-    return float(cosine_similarity([v1], [v2])[0][0])
+    return float((cosine_similarity([v1], [v2])[0][0]+1)/2)
 
 # ================================
 # Endpoints

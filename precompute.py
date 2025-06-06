@@ -4,6 +4,7 @@ import random
 from tqdm import tqdm
 from nltk.corpus import wordnet as wn, names
 from wordfreq import word_frequency
+from nltk.stem import WordNetLemmatizer
 
 import nltk
 nltk.download('wordnet')
@@ -12,13 +13,19 @@ nltk.download('names')
 # ========================
 # Config
 # ========================
-MAX_WORDS_PER_BUCKET = 2000  # set to None to include all
+MAX_WORDS_PER_BUCKET = 2000  # Set to None to include all
 EASY_FREQ_MIN = 1e-4
 MEDIUM_FREQ_MIN = 1e-5
+MIN_WORD_LENGTH = 4
 
 # ========================
 # Helpers
 # ========================
+lemmatizer = WordNetLemmatizer()
+
+def lemmatize(word: str) -> str:
+    return lemmatizer.lemmatize(word.lower(), pos='n')  # noun lemmatization only
+
 def is_clean_english(word):
     return word.isalpha() and word.islower() and re.match("^[a-z]+$", word)
 
@@ -48,6 +55,8 @@ print("Filtering and computing word frequencies...")
 words_and_freqs = []
 for word in tqdm(lemmas):
     if not is_clean_english(word):
+        continue
+    if len(word) < MIN_WORD_LENGTH:
         continue
     freq = word_frequency(word, 'en', wordlist='large')
     if freq == 0:
