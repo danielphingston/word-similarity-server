@@ -7,19 +7,26 @@ from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import spacy
 from functools import lru_cache
+import json
 
 # ================================
 # Load NLP & Embeddings
 # ================================
+print("Loading spaCy model...")
 try:
     nlp = spacy.load("en_core_web_sm")
 except OSError:
     spacy.cli.download("en_core_web_sm")
     nlp = spacy.load("en_core_web_sm")
+
+print("Loading GloVe Twitter embeddings...")
 model = api.load("glove-twitter-25")
-all_words = list(model.key_to_index.keys())
 
 app = FastAPI()
+
+print("Loading word difficulty buckets...")
+with open("words.json", "r") as f:
+    word_buckets = json.load(f)
 
 # ================================
 # Utils
@@ -41,13 +48,6 @@ def similarity_score(w1: str, w2: str):
         return None
     return float(cosine_similarity([v1], [v2])[0][0])
 
-def get_random_lemmatized_word():
-    while True:
-        word = random.choice(all_words)
-        lemma = lemmatize(word)
-        if get_vector(lemma) is not None:
-            return lemma
-
 # ================================
 # Endpoints
 # ================================
@@ -67,17 +67,19 @@ def get_similarity(word1: str = Query(...), word2: str = Query(...)):
     }
 
 @app.get("/random-word")
-def get_random_word():
-    word = get_random_lemmatized_word()
-    return {"word": word}
+def get_random_word(difficulty: str = Query("easy", regex="^(easy|medium|hard)$")):
+    words = word_buckets.get(difficulty, [])
+    if not words:
+        return {"word": None, "error": f"No words found for difficulty '{difficulty}'"}
+    word = random.choice(words)
+    return {"word": word, "difficulty": difficulty}
+
 
 class HintRequest(BaseModel):
     word: str
     exclude: List[str] = []
     threshold: float = 0.7
     tolerance: float = 0.05  # Optional: how close to threshold
-
-
 
 @app.post("/hint")
 def get_hint(data: HintRequest):
