@@ -6,6 +6,7 @@ import gensim.downloader as api
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import spacy
+from functools import lru_cache
 
 # ================================
 # Load NLP & Embeddings
@@ -76,26 +77,24 @@ class HintRequest(BaseModel):
     threshold: float = 0.7
     tolerance: float = 0.05  # Optional: how close to threshold
 
+
+
 @app.post("/hint")
 def get_hint(data: HintRequest):
-    base = lemmatize(data.word)
-    exclude_set = {lemmatize(w) for w in data.exclude}
-    candidates = []
+    try:
+        similar_words = model.most_similar(data.word, topn=50)
+    except KeyError:
+        return {"hint": None, "reason": "word not in model"}
 
-    for candidate in all_words:
-        lemma = lemmatize(candidate)
-        if lemma in exclude_set or lemma == base:
-            continue
-        sim = similarity_score(base, lemma)
-        if sim is None:
-            continue
-        if abs(sim - data.threshold) <= data.tolerance:
-            candidates.append((lemma, sim))
+    exclude_set = set(data.exclude)
+    exclude_set.add(data.word)
 
-    if not candidates:
-        return {"hint": None, "reason": "no match near threshold"}
+    # Reverse sort to get least similar last
+    for word, score in reversed(similar_words):
+        if word not in exclude_set:
+            return {"hint": word, "similarity": score}
 
-    # Return one with closest similarity
-    candidates.sort(key=lambda x: abs(x[1] - data.threshold))
-    best = candidates[0]
-    return {"hint": best[0], "similarity": best[1]}
+    return {"hint": None, "reason": "no usable hint found"}
+
+
+        
