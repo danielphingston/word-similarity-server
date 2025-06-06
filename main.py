@@ -50,6 +50,10 @@ def get_random_lemmatized_word():
 # ================================
 # Endpoints
 # ================================
+@app.get("/")
+def read_root():
+    return {"message": "Welcome to the Word Similarity API!"}
+
 @app.get("/similarity")
 def get_similarity(word1: str = Query(...), word2: str = Query(...)):
     lemma1 = lemmatize(word1)
