@@ -63,7 +63,7 @@ def get_similarity(word1: str = Query(...), word2: str = Query(...)):
     return {
         "word1": lemma1,
         "word2": lemma2,
-        "similarity": sim if sim is not None else "unknown"
+        "similarity": sim if sim is not None else -1
     }
 
 @app.get("/random-word")
