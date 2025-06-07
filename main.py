@@ -23,7 +23,7 @@ model = api.load("glove-twitter-25")
 app = FastAPI()
 
 print("Loading word difficulty buckets...")
-with open("words.json", "r") as f:
+with open("data/words.json", "r") as f:
     word_buckets = json.load(f)
 
 # ================================
