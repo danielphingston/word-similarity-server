@@ -4,3 +4,6 @@ numpy
 scikit-learn
 nltk
 joblib
+psutil
+python-Levenshtein
+annoy

@@ -8,33 +8,66 @@ import time
 # ================================
 API_BASE_URL = "http://localhost:8000"
 
-# A list of word pairs to test, with a description of the expected relationship.
-# This list covers various semantic relationships to test the model's nuances.
+# Expanded list of test cases to cover more semantic relationships
 TEST_CASES = [
-    # --- High Similarity ---
-    ("car", "vehicle", "High (Synonym-like)"),
-    ("king", "queen", "High (Strongly related concepts)"),
+    # --- Exact Matches ---
+    ("happy", "happy", "Exact Match"),
+    ("car", "car", "Exact Match"),
+    ("rich", "rich", "Exact Match"),
+    ("student", "student", "Exact Match"),
+    ("dog", "dog", "Exact Match"),
+    
+    # --- High Similarity (Synonyms & Direct Relationships) ---
+    ("happy", "joyful", "High (Synonym)"),
+    ("car", "vehicle", "High (Synonym)"),
+    ("rich", "wealthy", "High (Synonym)"),
+    ("student", "pupil", "High (Synonym)"),
     ("dog", "puppy", "High (Direct relationship)"),
+    ("king", "queen", "High (Strongly related concepts)"),
+    ("idea", "thought", "High (Abstract synonym)"),
 
-    # --- Medium Similarity ---
+    # --- Medium Similarity (Contextual & Functional Relationships) ---
     ("doctor", "hospital", "Medium (Person and Place)"),
     ("book", "library", "Medium (Object and Place)"),
     ("computer", "keyboard", "Medium (System and Component)"),
     ("japan", "tokyo", "Medium (Country and Capital)"),
+    ("student", "exam", "Medium (Person and Event)"),
+    ("drive", "road", "Medium (Action and Location)"),
 
-    # --- Low Similarity ---
-    ("tree", "sky", "Low (Co-occur in scenes, but unrelated)"),
+    # --- Part/Whole Relationships (Meronyms/Holonyms) ---
+    ("finger", "hand", "Part/Whole"),
+    ("wheel", "bicycle", "Part/Whole"),
+    ("kitchen", "house", "Part/Whole"),
+
+    # --- Category/Instance Relationships (Hypernyms/Hyponyms) ---
+    ("animal", "lion", "Category/Instance"),
+    ("color", "blue", "Category/Instance"),
+    ("emotion", "happiness", "Category/Instance"),
+    
+    # --- Antonyms (Opposites) - Expect low-to-medium scores ---
+    # Note: Antonyms often appear in similar contexts, so they are not 0.
+    ("hot", "cold", "Antonym"),
+    ("happy", "sad", "Antonym"),
+    ("love", "hate", "Antonym"),
+    ("light", "dark", "Antonym"),
+
+    # --- Low / Distant Similarity ---
+    ("tree", "sky", "Low (Co-occur in scenes)"),
     ("sun", "water", "Low (General nature terms)"),
-    ("japan", "game", "Low (User's test case, abstract link)"),
+    ("king", "castle", "Low (Related but distinct)"),
+    ("japan", "game", "Low (User's test case)"),
 
     # --- Very Low / No Similarity ---
-    ("music", "algorithm", "Very Low (Unrelated abstract concepts)"),
-    ("car", "philosophy", "Very Low (Unrelated concrete and abstract)"),
+    ("music", "algorithm", "Very Low (Unrelated abstract)"),
+    ("car", "philosophy", "Very Low (Unrelated concrete/abstract)"),
     ("moon", "cheese", "Very Low (Classic unrelated pair)"),
+    ("science", "religion", "Very Low (Opposing domains)"),
 
-    # --- Invalid Word Test ---
-    # 'brillig' is a nonsense word from the poem "Jabberwocky" and should not be in the model.
-    ("house", "brillig", "Invalid Word (Should fail validation)")
+    # --- Invalid Input Tests ---
+    ("house", "brillig", "Invalid Word (brillig)"),
+    ("asdfgh", "zxcvbn", "Invalid Word (nonsense)"),
+    ("hi", "there", "Invalid Length"),
+    ("car", "go", "Invalid Length")
 ]
 
 def run_test(word1: str, word2: str, description: str):
@@ -52,7 +85,20 @@ def run_test(word1: str, word2: str, description: str):
         response.raise_for_status()
         data = response.json()
 
-        print(f"  ✅ SUCCESS | Score: {data.get('similarity_score', 'N/A')}, Valid Guess: {data.get('valid_guess', 'N/A')}")
+        required_keys = ["similarity", "progress_score", "isValidGuess", "reason"]
+        if not all(key in data for key in required_keys):
+            print(f"  ❌ FAILED: Response is missing required keys.")
+            print(f"     Required: {required_keys}, Received: {list(data.keys())}")
+            return False
+
+        sim = data['similarity']
+        progress = data['progress_score']
+        is_valid = data['isValidGuess']
+        reason = data['reason']
+        
+        sim_formatted = f"{sim:.4f}" if sim != -1 else "-1"
+        
+        print(f"  ✅ SUCCESS | Raw Sim: {sim_formatted} | Progress: {progress}/100 | Valid: {is_valid} | Reason: {reason}")
         return True
 
     except requests.exceptions.ConnectionError:
@@ -71,7 +117,6 @@ def run_test(word1: str, word2: str, description: str):
         print(f"  ❌ FAILED: An unexpected request error occurred: {e}")
         return False
     finally:
-        # Add a small delay to avoid spamming the server
         time.sleep(0.1)
 
 
@@ -79,19 +124,18 @@ def main():
     """
     Main function to run all test cases and print a summary.
     """
-    print("="*60)
-    print("  Running Word Similarity API Validation Suite")
-    print("="*60)
+    print("="*80)
+    print("  Running Final Word Similarity API Validation Suite (Expanded)")
+    print("="*80)
     
-    success_count = 0
-    failure_count = 0
+    success_count, failure_count = 0, 0
 
     for word1, word2, description in TEST_CASES:
         if run_test(word1, word2, description):
             success_count += 1
         else:
             failure_count += 1
-        print("-" * 60)
+        print("-" * 80)
 
     print("🏁 Validation Complete 🏁\n")
     print("--- Summary ---")
@@ -104,7 +148,7 @@ def main():
         print("\nSome tests failed. Please review the log.")
         sys.exit(1)
     else:
-        print("\nAll tests passed successfully!")
+        print("\nAll tests passed successfully! The API is ready.")
         sys.exit(0)
 
 if __name__ == "__main__":

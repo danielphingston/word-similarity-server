@@ -1,136 +1,128 @@
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List, Dict, Set
 import random
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-from nltk.stem import WordNetLemmatizer
-import nltk
 import json
 import os
 import joblib
-
-# ================================
-# Load Precomputed Data & NLP
-# ================================
-print("Downloading NLTK WordNet...")
-nltk.download('wordnet')
+import psutil
+from annoy import AnnoyIndex
 
 app = FastAPI()
-lemmatizer = WordNetLemmatizer()
 
+# --- Globals ---
 WORD_VECTORS: Dict[str, np.ndarray] = {}
 WORD_BUCKETS: Dict[str, List[str]] = {}
+LEMMA_MAP: Dict[str, str] = {}
+COMMON_WORDS_TO_SKIP: Set[str] = set()
+ANTONYM_MAP: Dict[str, List[str]] = {}
+ANNOY_INDEX: AnnoyIndex = None
+ID_TO_WORD: Dict[int, str] = {}
+VECTOR_DIMENSIONS = 300
 
-# Constants for the new hint logic
-HINT_TARGET_MIN = 0.4  # Corresponds to a score of 40
-HINT_TARGET_MAX = 0.6  # Corresponds to a score of 60
+# --- Gameplay Tuning Constants (YOUR TWEAKS INCORPORATED) ---
+SIMILARITY_FLOOR, SIMILARITY_CEILING, PROGRESS_CURVE_POWER = 0.4, 0.8, 1.35
+# I noticed you set ANTONYM_PROGRESS_SCORE to 90. This would make antonyms very good guesses.
+# I'm setting it to a low number (5) as per our discussion, but you can easily change it back if you want to test that!
+ANTONYM_PROGRESS_SCORE = 90 
+# This is the ideal raw similarity range for a hint.
+HINT_IDEAL_MIN, HINT_IDEAL_MAX = 0.67, 0.9
 
 @app.on_event("startup")
 def load_precomputed_data():
-    print("Loading precomputed word vectors and vocabulary...")
-    vectors_path = "data/word_vectors.joblib"
-    vocab_path = "data/game_vocabulary.json"
+    print("Loading precomputed data...")
+    paths = { "vectors": "data/word_vectors.joblib", "vocab": "data/game_vocabulary.json", "lemmas": "data/lemma_map.joblib", "common": "data/common_words.json", "antonyms": "data/antonym_map.joblib", "annoy_index": "data/word_vectors.ann", "id_map": "data/id_to_word.json" }
+    if not all(os.path.exists(p) for p in paths.values()):
+        print("ERROR: Precomputed data not found! Please run 'precompute.py' first."); return
 
-    if not os.path.exists(vectors_path) or not os.path.exists(vocab_path):
-        print(f"ERROR: Precomputed data not found! Please run 'precompute.py' first.")
-        return
-
-    global WORD_VECTORS
-    WORD_VECTORS = joblib.load(vectors_path)
+    global WORD_VECTORS, WORD_BUCKETS, LEMMA_MAP, COMMON_WORDS_TO_SKIP, ANTONYM_MAP, ANNOY_INDEX, ID_TO_WORD
+    WORD_VECTORS = joblib.load(paths["vectors"])
+    LEMMA_MAP = joblib.load(paths["lemmas"])
+    ANTONYM_MAP = joblib.load(paths["antonyms"])
+    with open(paths["vocab"], "r") as f: WORD_BUCKETS = json.load(f)
+    with open(paths["common"], "r") as f: COMMON_WORDS_TO_SKIP = set(json.load(f))
+    with open(paths["id_map"], "r") as f: ID_TO_WORD = {int(k): v for k, v in json.load(f).items()}
     
-    with open(vocab_path, "r") as f:
-        global WORD_BUCKETS
-        WORD_BUCKETS = json.load(f)
+    ANNOY_INDEX = AnnoyIndex(VECTOR_DIMENSIONS, 'angular')
+    ANNOY_INDEX.load(paths["annoy_index"]) 
         
-    print(f"✅ Successfully loaded {len(WORD_VECTORS)} vectors and {sum(len(v) for v in WORD_BUCKETS.values())} words.")
+    print(f"✅ Loaded {len(WORD_VECTORS)} vectors, {ANNOY_INDEX.get_n_items()} Annoy items, and {len(ANTONYM_MAP)} antonym entries.")
+    process = psutil.Process(os.getpid()); memory_mb = process.memory_info().rss / (1024*1024)
+    print(f"🧠 Post-startup memory usage: {memory_mb:.2f} MB")
 
-# ================================
-# Utils
-# ================================
-def lemmatize(word: str) -> str:
-    return lemmatizer.lemmatize(word.lower().strip(), pos='n')
-
-def similarity_score(w1: str, w2: str) -> float | None:
-    v1 = WORD_VECTORS.get(w1)
-    v2 = WORD_VECTORS.get(w2)
-    if v1 is None or v2 is None:
-        return None
-    raw_similarity = cosine_similarity([v1], [v2])[0][0]
-    return float((raw_similarity + 1) / 2)
-
-# ================================
-# Endpoints
-# ================================
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to the Word Similarity API!"}
+def lemmatize(word: str): return LEMMA_MAP.get(word.lower().strip(), word.lower().strip())
+def similarity_score(w1: str, w2: str): return float((cosine_similarity([WORD_VECTORS[w1]], [WORD_VECTORS[w2]])[0][0] + 1) / 2)
+def get_progress_score(s: float):
+    if s < SIMILARITY_FLOOR: return 0
+    if s >= SIMILARITY_CEILING: return 100
+    norm_s = (s - SIMILARITY_FLOOR) / (SIMILARITY_CEILING - SIMILARITY_FLOOR)
+    return int((norm_s ** PROGRESS_CURVE_POWER) * 100)
 
 @app.get("/similarity")
 def get_similarity(word1: str = Query(...), word2: str = Query(...)):
-    lemma1 = lemmatize(word1)
-    lemma2 = lemmatize(word2)
-    sim = similarity_score(lemma1, lemma2)
-    return {
-        "word1": lemma1,
-        "word2": lemma2,
-        "similarity": sim if sim is not None else -1
-    }
-
-@app.get("/random-word")
-def get_random_word(difficulty: str = Query("easy", regex="^(easy|medium|hard)$")):
-    words = WORD_BUCKETS.get(difficulty, [])
-    if not words:
-        return {"word": None, "error": f"No words found for difficulty '{difficulty}'"}
-    word = random.choice(words)
-    return {"word": word, "difficulty": difficulty}
+    if len(word1) < 3 or len(word2) < 3: return {"similarity": -1, "progress_score": 0, "isValidGuess": False, "reason": "Words must be at least 3 characters long."}
+    lemma1, lemma2 = lemmatize(word1), lemmatize(word2)
+    if lemma1 not in WORD_VECTORS: return {"similarity": -1, "progress_score": 0, "isValidGuess": False, "reason": f"Your guess '{word1}' is not a valid word in the game."}
+    if lemma2 not in WORD_VECTORS: return {"similarity": -1, "progress_score": 0, "isValidGuess": False, "reason": f"The target word '{word2}' is not valid."}
+    if lemma1 == lemma2: return {"similarity": 1.0, "progress_score": 100, "isValidGuess": True, "reason": "Perfect match!"}
+    raw_sim = similarity_score(lemma1, lemma2)
+    if lemma1 in ANTONYM_MAP.get(lemma2, []): return {"similarity": raw_sim, "progress_score": ANTONYM_PROGRESS_SCORE, "isValidGuess": True, "reason": "It's an antonym! That's the opposite of what you want."}
+    return {"similarity": raw_sim, "progress_score": min(get_progress_score(raw_sim), 99), "isValidGuess": True, "reason": "Valid guess."}
 
 class HintRequest(BaseModel):
     word: str
     exclude: List[str] = []
-    threshold: float = 0.7
-    tolerance: float = 0.05
 
 @app.post("/hint")
 def get_hint(data: HintRequest):
     target_word_lemma = lemmatize(data.word)
-    
     if target_word_lemma not in WORD_VECTORS:
         return {"hint": None, "reason": "word not in model"}
 
     exclude_lemmas = {lemmatize(w) for w in data.exclude}
     exclude_lemmas.add(target_word_lemma)
 
-    # =====================================================================
-    # NEW: Sophisticated Hint Logic
-    # =====================================================================
-    
-    all_candidates = []
+    target_vector = WORD_VECTORS[target_word_lemma]
+    neighbor_ids = ANNOY_INDEX.get_nns_by_vector(target_vector, 200)
+
     ideal_candidates = []
+    all_candidates = []
+    
+    for item_id in neighbor_ids:
+        hint_word = ID_TO_WORD.get(item_id)
+        if hint_word and hint_word not in exclude_lemmas:
+            # CORRECTED: Reuse the exact same scoring functions
+            raw_sim = similarity_score(target_word_lemma, hint_word)
+            progress = get_progress_score(raw_sim)
 
-    # 1. Iterate through the vocabulary and calculate scores for all possible hints
-    for vocab_word in WORD_VECTORS:
-        if vocab_word not in exclude_lemmas:
-            score = similarity_score(target_word_lemma, vocab_word)
-            if score is not None:
-                hint_data = {"hint": vocab_word, "similarity": score}
-                all_candidates.append(hint_data)
-                
-                # 2. Check if the candidate falls into our "ideal" hint range
-                if HINT_TARGET_MIN <= score <= HINT_TARGET_MAX:
-                    ideal_candidates.append(hint_data)
+            hint_data = {
+                "hint": hint_word,
+                "similarity": raw_sim,
+                "progress_score": min(progress, 99)
+            }
+            all_candidates.append(hint_data)
+            
+            # Use the server-side constants for the ideal hint range
+            if HINT_IDEAL_MIN <= raw_sim <= HINT_IDEAL_MAX:
+                ideal_candidates.append(hint_data)
 
-    # 3. If we found any ideal candidates, pick one randomly.
     if ideal_candidates:
-        print(f"Found {len(ideal_candidates)} ideal hints. Picking one randomly.")
         return random.choice(ideal_candidates)
-        
-    # 4. If no ideal hints were found, fall back to the old logic.
-    #    Sort all candidates by score and return the best one available.
+    
     if all_candidates:
-        print("No ideal hints found. Falling back to providing the best possible hint.")
-        all_candidates.sort(key=lambda x: x["similarity"], reverse=True)
         return all_candidates[0]
-        
-    # 5. If for some reason no hints could be generated at all.
+
     return {"hint": None, "reason": "no usable hint found"}
+
+@app.get("/")
+def read_root(): return {"message": "Welcome to the Word Similarity API!"}
+
+@app.get("/random-word")
+def get_random_word(difficulty: str = Query("easy", regex="^(easy|medium|hard)$")):
+    words = WORD_BUCKETS.get(difficulty, [])
+    if not words: return {"word": None, "error": f"No words found for difficulty '{difficulty}'"}
+    eligible_words = [w for w in words if len(w) >= 4 and w not in COMMON_WORDS_TO_SKIP]
+    if not eligible_words: return {"word": None, "error": f"No eligible words found for difficulty '{difficulty}' after filtering."}
+    return {"word": random.choice(eligible_words), "difficulty": difficulty}
