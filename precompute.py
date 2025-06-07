@@ -81,11 +81,11 @@ def precompute_all():
                 for ant in l.antonyms():
                     if ant.name() in word_vectors: antonyms.add(ant.name())
         if antonyms: antonym_map[word] = list(antonyms)
-    joblib.dump(antonym_map, OUTPUT_ANTONYM_MAP_PATH, compress=3)
+    joblib.dump(antonym_map, OUTPUT_ANTONYM_MAP_PATH, compress=3, protocol=4)
 
     print("\nStep 8: Saving final data files...")
-    joblib.dump(word_vectors, OUTPUT_VECTORS_PATH, compress=3)
-    joblib.dump(lemma_map, OUTPUT_LEMMA_MAP_PATH, compress=3)
+    joblib.dump(word_vectors, OUTPUT_VECTORS_PATH, compress=3, protocol=4)
+    joblib.dump(lemma_map, OUTPUT_LEMMA_MAP_PATH, compress=3, protocol=4)
     common_words_to_skip = sorted_vocab[:NUM_COMMON_WORDS_TO_SKIP]
     with open(OUTPUT_COMMON_WORDS_PATH, 'w') as f: json.dump(common_words_to_skip, f)
     final_word_buckets = {"easy": [w for w in sorted_vocab[:5000] if w in word_vectors], "medium": [w for w in sorted_vocab[5000:12000] if w in word_vectors], "hard": [w for w in sorted_vocab[12000:] if w in word_vectors]}
