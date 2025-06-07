@@ -32,15 +32,10 @@ HINT_IDEAL_MIN, HINT_IDEAL_MAX = 0.67, 0.9
 @app.on_event("startup")
 def load_precomputed_data():
     print("Verifying and loading precomputed data...")
-    
-    # =====================================================================
-    # NEW: Self-Healing Data Downloader
-    # This block ensures all required data files are present before loading.
-    # =====================================================================
+
     DATA_DIR = "data"
-    BASE_URL = "https://raw.githubusercontent.com/danielphingston/word-similarity-server/master/data/"
-    
-    # List of all required data files
+    BASE_URL = "https://media.githubusercontent.com/media/danielphingston/word-similarity-server/master/data/"
+
     required_files = [
         "word_vectors.joblib", "game_vocabulary.json", "lemma_map.joblib",
         "common_words.json", "antonym_map.joblib", "word_vectors.ann", "id_to_word.json"
@@ -51,43 +46,39 @@ def load_precomputed_data():
     for filename in required_files:
         local_path = os.path.join(DATA_DIR, filename)
         if not os.path.exists(local_path):
-            url = f"{BASE_URL}{filename}"
-            print(f"Data file '{filename}' not found. Downloading from GitHub...")
+            print(f"Downloading {filename} from GitHub LFS...")
             try:
+                url = BASE_URL + filename
                 response = requests.get(url, stream=True)
-                response.raise_for_status()  # Raise an exception for bad status codes
-                
+                response.raise_for_status()
                 with open(local_path, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=8192):
+                    for chunk in response.iter_content(8192):
                         f.write(chunk)
-                print(f"Successfully downloaded '{filename}'.")
-            except requests.exceptions.RequestException as e:
-                # If a file can't be downloaded, the app can't start.
-                raise RuntimeError(f"FATAL: Could not download essential data file '{filename}'. Error: {e}") from e
+                print(f"✅ {filename} downloaded.")
+            except Exception as e:
+                raise RuntimeError(f"❌ Failed to download {filename}: {e}")
 
-    # --- Load the data now that we know it exists ---
-    paths = {
-        "vectors": "data/word_vectors.joblib", "vocab": "data/game_vocabulary.json",
-        "lemmas": "data/lemma_map.joblib", "common": "data/common_words.json",
-        "antonyms": "data/antonym_map.joblib", "annoy_index": "data/word_vectors.ann",
-        "id_map": "data/id_to_word.json"
-    }
-    
+    # Load all data files
     global WORD_VECTORS, WORD_BUCKETS, LEMMA_MAP, COMMON_WORDS_TO_SKIP, ANTONYM_MAP, ANNOY_INDEX, ID_TO_WORD
-    WORD_VECTORS = joblib.load(paths["vectors"])
-    LEMMA_MAP = joblib.load(paths["lemmas"])
-    ANTONYM_MAP = joblib.load(paths["antonyms"])
-    with open(paths["vocab"], "r") as f: WORD_BUCKETS = json.load(f)
-    with open(paths["common"], "r") as f: COMMON_WORDS_TO_SKIP = set(json.load(f))
-    with open(paths["id_map"], "r") as f: ID_TO_WORD = {int(k): v for k, v in json.load(f).items()}
-    
-    ANNOY_INDEX = AnnoyIndex(VECTOR_DIMENSIONS, 'angular')
-    ANNOY_INDEX.load(paths["annoy_index"]) 
-        
-    print(f"✅ Loaded {len(WORD_VECTORS)} vectors, {ANNOY_INDEX.get_n_items()} Annoy items, and {len(ANTONYM_MAP)} antonym entries.")
-    process = psutil.Process(os.getpid()); memory_mb = process.memory_info().rss / (1024*1024)
-    print(f"🧠 Post-startup memory usage: {memory_mb:.2f} MB")
+    WORD_VECTORS = joblib.load(os.path.join(DATA_DIR, "word_vectors.joblib"))
+    LEMMA_MAP = joblib.load(os.path.join(DATA_DIR, "lemma_map.joblib"))
+    ANTONYM_MAP = joblib.load(os.path.join(DATA_DIR, "antonym_map.joblib"))
+    with open(os.path.join(DATA_DIR, "game_vocabulary.json")) as f:
+        WORD_BUCKETS = json.load(f)
+    with open(os.path.join(DATA_DIR, "common_words.json")) as f:
+        COMMON_WORDS_TO_SKIP = set(json.load(f))
+    with open(os.path.join(DATA_DIR, "id_to_word.json")) as f:
+        ID_TO_WORD = {int(k): v for k, v in json.load(f).items()}
 
+    ANNOY_INDEX = AnnoyIndex(VECTOR_DIMENSIONS, 'angular')
+    ANNOY_INDEX.load(os.path.join(DATA_DIR, "word_vectors.ann"))
+
+    print(f"✅ Loaded {len(WORD_VECTORS)} vectors, {ANNOY_INDEX.get_n_items()} Annoy items, and {len(ANTONYM_MAP)} antonym entries.")
+    process = psutil.Process(os.getpid())
+    memory_mb = process.memory_info().rss / (1024 * 1024)
+    print(f"🧠 Memory usage after startup: {memory_mb:.2f} MB")
+
+    
 def lemmatize(word: str): return LEMMA_MAP.get(word.lower().strip(), word.lower().strip())
 def similarity_score(w1: str, w2: str): return float((cosine_similarity([WORD_VECTORS[w1]], [WORD_VECTORS[w2]])[0][0] + 1) / 2)
 def get_progress_score(s: float):
