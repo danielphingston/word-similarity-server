@@ -7,3 +7,4 @@ psutil
 python-Levenshtein
 annoy
 hypercorn==0.14.4
+requests
