@@ -1,54 +1,63 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict
 import random
-import gensim.downloader as api
-from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-from functools import lru_cache
-import json
+from sklearn.metrics.pairwise import cosine_similarity
 from nltk.stem import WordNetLemmatizer
 import nltk
+import json
+import os
+import joblib
 
 # ================================
-# Load NLP & Embeddings
+# Load Precomputed Data & NLP
 # ================================
-
 print("Downloading NLTK WordNet...")
 nltk.download('wordnet')
 
-print("Loading GloVe Twitter embeddings...")
-model = api.load("glove-twitter-25")
-
 app = FastAPI()
+lemmatizer = WordNetLemmatizer()
 
-print("Loading word difficulty buckets...")
-with open("data/words.json", "r") as f:
-    word_buckets = json.load(f)
+WORD_VECTORS: Dict[str, np.ndarray] = {}
+WORD_BUCKETS: Dict[str, List[str]] = {}
+
+# Constants for the new hint logic
+HINT_TARGET_MIN = 0.4  # Corresponds to a score of 40
+HINT_TARGET_MAX = 0.6  # Corresponds to a score of 60
+
+@app.on_event("startup")
+def load_precomputed_data():
+    print("Loading precomputed word vectors and vocabulary...")
+    vectors_path = "data/word_vectors.joblib"
+    vocab_path = "data/game_vocabulary.json"
+
+    if not os.path.exists(vectors_path) or not os.path.exists(vocab_path):
+        print(f"ERROR: Precomputed data not found! Please run 'precompute.py' first.")
+        return
+
+    global WORD_VECTORS
+    WORD_VECTORS = joblib.load(vectors_path)
+    
+    with open(vocab_path, "r") as f:
+        global WORD_BUCKETS
+        WORD_BUCKETS = json.load(f)
+        
+    print(f"✅ Successfully loaded {len(WORD_VECTORS)} vectors and {sum(len(v) for v in WORD_BUCKETS.values())} words.")
 
 # ================================
 # Utils
 # ================================
-
-lemmatizer = WordNetLemmatizer()
-
 def lemmatize(word: str) -> str:
-    word = word.lower()
-    lemma = lemmatizer.lemmatize(word, pos='n')  # noun-only lemmatization
-    return lemma
+    return lemmatizer.lemmatize(word.lower().strip(), pos='n')
 
-def get_vector(word: str):
-    try:
-        return model[word]
-    except KeyError:
-        return None
-
-def similarity_score(w1: str, w2: str):
-    v1 = get_vector(w1)
-    v2 = get_vector(w2)
+def similarity_score(w1: str, w2: str) -> float | None:
+    v1 = WORD_VECTORS.get(w1)
+    v2 = WORD_VECTORS.get(w2)
     if v1 is None or v2 is None:
         return None
-    return float((cosine_similarity([v1], [v2])[0][0]+1)/2)
+    raw_similarity = cosine_similarity([v1], [v2])[0][0]
+    return float((raw_similarity + 1) / 2)
 
 # ================================
 # Endpoints
@@ -70,35 +79,58 @@ def get_similarity(word1: str = Query(...), word2: str = Query(...)):
 
 @app.get("/random-word")
 def get_random_word(difficulty: str = Query("easy", regex="^(easy|medium|hard)$")):
-    words = word_buckets.get(difficulty, [])
+    words = WORD_BUCKETS.get(difficulty, [])
     if not words:
         return {"word": None, "error": f"No words found for difficulty '{difficulty}'"}
     word = random.choice(words)
     return {"word": word, "difficulty": difficulty}
 
-
 class HintRequest(BaseModel):
     word: str
     exclude: List[str] = []
     threshold: float = 0.7
-    tolerance: float = 0.05  # Optional: how close to threshold
+    tolerance: float = 0.05
 
 @app.post("/hint")
 def get_hint(data: HintRequest):
-    try:
-        similar_words = model.most_similar(data.word, topn=50)
-    except KeyError:
+    target_word_lemma = lemmatize(data.word)
+    
+    if target_word_lemma not in WORD_VECTORS:
         return {"hint": None, "reason": "word not in model"}
 
-    exclude_set = set(data.exclude)
-    exclude_set.add(data.word)
+    exclude_lemmas = {lemmatize(w) for w in data.exclude}
+    exclude_lemmas.add(target_word_lemma)
 
-    # Reverse sort to get least similar last
-    for word, score in reversed(similar_words):
-        if word not in exclude_set:
-            return {"hint": word, "similarity": score}
+    # =====================================================================
+    # NEW: Sophisticated Hint Logic
+    # =====================================================================
+    
+    all_candidates = []
+    ideal_candidates = []
 
-    return {"hint": None, "reason": "no usable hint found"}
+    # 1. Iterate through the vocabulary and calculate scores for all possible hints
+    for vocab_word in WORD_VECTORS:
+        if vocab_word not in exclude_lemmas:
+            score = similarity_score(target_word_lemma, vocab_word)
+            if score is not None:
+                hint_data = {"hint": vocab_word, "similarity": score}
+                all_candidates.append(hint_data)
+                
+                # 2. Check if the candidate falls into our "ideal" hint range
+                if HINT_TARGET_MIN <= score <= HINT_TARGET_MAX:
+                    ideal_candidates.append(hint_data)
 
-
+    # 3. If we found any ideal candidates, pick one randomly.
+    if ideal_candidates:
+        print(f"Found {len(ideal_candidates)} ideal hints. Picking one randomly.")
+        return random.choice(ideal_candidates)
         
+    # 4. If no ideal hints were found, fall back to the old logic.
+    #    Sort all candidates by score and return the best one available.
+    if all_candidates:
+        print("No ideal hints found. Falling back to providing the best possible hint.")
+        all_candidates.sort(key=lambda x: x["similarity"], reverse=True)
+        return all_candidates[0]
+        
+    # 5. If for some reason no hints could be generated at all.
+    return {"hint": None, "reason": "no usable hint found"}

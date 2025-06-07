@@ -1,0 +1,6 @@
+gensim
+torch
+nltk
+tqdm
+requests
+joblib
