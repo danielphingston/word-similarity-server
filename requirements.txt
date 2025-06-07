@@ -1,5 +1,4 @@
 fastapi
-uvicorn[standard]
 numpy
 scikit-learn
 nltk
@@ -7,3 +6,4 @@ joblib
 psutil
 python-Levenshtein
 annoy
+hypercorn==0.14.4
