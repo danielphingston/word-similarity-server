@@ -9,6 +9,7 @@ import os
 import joblib
 import psutil
 from annoy import AnnoyIndex
+import requests # <-- Import requests
 
 app = FastAPI()
 
@@ -24,19 +25,54 @@ VECTOR_DIMENSIONS = 300
 
 # --- Gameplay Tuning Constants (YOUR TWEAKS INCORPORATED) ---
 SIMILARITY_FLOOR, SIMILARITY_CEILING, PROGRESS_CURVE_POWER = 0.4, 0.8, 1.35
-# I noticed you set ANTONYM_PROGRESS_SCORE to 90. This would make antonyms very good guesses.
-# I'm setting it to a low number (5) as per our discussion, but you can easily change it back if you want to test that!
-ANTONYM_PROGRESS_SCORE = 90 
-# This is the ideal raw similarity range for a hint.
+# Note: As you've set, antonyms will now receive a very high score.
+ANTONYM_PROGRESS_SCORE = 90
 HINT_IDEAL_MIN, HINT_IDEAL_MAX = 0.67, 0.9
 
 @app.on_event("startup")
 def load_precomputed_data():
-    print("Loading precomputed data...")
-    paths = { "vectors": "data/word_vectors.joblib", "vocab": "data/game_vocabulary.json", "lemmas": "data/lemma_map.joblib", "common": "data/common_words.json", "antonyms": "data/antonym_map.joblib", "annoy_index": "data/word_vectors.ann", "id_map": "data/id_to_word.json" }
-    if not all(os.path.exists(p) for p in paths.values()):
-        print("ERROR: Precomputed data not found! Please run 'precompute.py' first."); return
+    print("Verifying and loading precomputed data...")
+    
+    # =====================================================================
+    # NEW: Self-Healing Data Downloader
+    # This block ensures all required data files are present before loading.
+    # =====================================================================
+    DATA_DIR = "data"
+    BASE_URL = "https://raw.githubusercontent.com/danielphingston/word-similarity-server/master/data/"
+    
+    # List of all required data files
+    required_files = [
+        "word_vectors.joblib", "game_vocabulary.json", "lemma_map.joblib",
+        "common_words.json", "antonym_map.joblib", "word_vectors.ann", "id_to_word.json"
+    ]
 
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    for filename in required_files:
+        local_path = os.path.join(DATA_DIR, filename)
+        if not os.path.exists(local_path):
+            url = f"{BASE_URL}{filename}"
+            print(f"Data file '{filename}' not found. Downloading from GitHub...")
+            try:
+                response = requests.get(url, stream=True)
+                response.raise_for_status()  # Raise an exception for bad status codes
+                
+                with open(local_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                print(f"Successfully downloaded '{filename}'.")
+            except requests.exceptions.RequestException as e:
+                # If a file can't be downloaded, the app can't start.
+                raise RuntimeError(f"FATAL: Could not download essential data file '{filename}'. Error: {e}") from e
+
+    # --- Load the data now that we know it exists ---
+    paths = {
+        "vectors": "data/word_vectors.joblib", "vocab": "data/game_vocabulary.json",
+        "lemmas": "data/lemma_map.joblib", "common": "data/common_words.json",
+        "antonyms": "data/antonym_map.joblib", "annoy_index": "data/word_vectors.ann",
+        "id_map": "data/id_to_word.json"
+    }
+    
     global WORD_VECTORS, WORD_BUCKETS, LEMMA_MAP, COMMON_WORDS_TO_SKIP, ANTONYM_MAP, ANNOY_INDEX, ID_TO_WORD
     WORD_VECTORS = joblib.load(paths["vectors"])
     LEMMA_MAP = joblib.load(paths["lemmas"])
