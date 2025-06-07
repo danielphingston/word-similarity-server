@@ -1,0 +1,5 @@
+.git
+outputs/
+trainning_data/
+_pycache_/
+env/

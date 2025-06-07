@@ -9,7 +9,6 @@ import os
 import joblib
 import psutil
 from annoy import AnnoyIndex
-import requests # <-- Import requests
 
 app = FastAPI()
 
@@ -25,40 +24,18 @@ VECTOR_DIMENSIONS = 300
 
 # --- Gameplay Tuning Constants (YOUR TWEAKS INCORPORATED) ---
 SIMILARITY_FLOOR, SIMILARITY_CEILING, PROGRESS_CURVE_POWER = 0.4, 0.8, 1.35
-# Note: As you've set, antonyms will now receive a very high score.
-ANTONYM_PROGRESS_SCORE = 90
+
+ANTONYM_PROGRESS_SCORE = 90 
+# This is the ideal raw similarity range for a hint.
 HINT_IDEAL_MIN, HINT_IDEAL_MAX = 0.67, 0.9
 
 @app.on_event("startup")
 def load_precomputed_data():
-    print("Verifying and loading precomputed data...")
+    print("Loading precomputed data...")
+    paths = { "vectors": "data/word_vectors.joblib", "vocab": "data/game_vocabulary.json", "lemmas": "data/lemma_map.joblib", "common": "data/common_words.json", "antonyms": "data/antonym_map.joblib", "annoy_index": "data/word_vectors.ann", "id_map": "data/id_to_word.json" }
+    if not all(os.path.exists(p) for p in paths.values()):
+        print("ERROR: Precomputed data not found! Please run 'precompute.py' first."); return
 
-    DATA_DIR = "data"
-    BASE_URL = "https://media.githubusercontent.com/media/danielphingston/word-similarity-server/master/data/"
-
-    required_files = [
-        "word_vectors.joblib", "game_vocabulary.json", "lemma_map.joblib",
-        "common_words.json", "antonym_map.joblib", "word_vectors.ann", "id_to_word.json"
-    ]
-
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-    for filename in required_files:
-        local_path = os.path.join(DATA_DIR, filename)
-        if not os.path.exists(local_path):
-            print(f"Downloading {filename} from GitHub LFS...")
-            try:
-                url = BASE_URL + filename
-                response = requests.get(url, stream=True)
-                response.raise_for_status()
-                with open(local_path, "wb") as f:
-                    for chunk in response.iter_content(8192):
-                        f.write(chunk)
-                print(f"✅ {filename} downloaded.")
-            except Exception as e:
-                raise RuntimeError(f"❌ Failed to download {filename}: {e}")
-
-    # Load all data files
     global WORD_VECTORS, WORD_BUCKETS, LEMMA_MAP, COMMON_WORDS_TO_SKIP, ANTONYM_MAP, ANNOY_INDEX, ID_TO_WORD
     WORD_VECTORS = joblib.load(os.path.join(DATA_DIR, "word_vectors.joblib"))
     LEMMA_MAP = joblib.load(os.path.join(DATA_DIR, "lemma_map.joblib"))
@@ -78,7 +55,7 @@ def load_precomputed_data():
     memory_mb = process.memory_info().rss / (1024 * 1024)
     print(f"🧠 Memory usage after startup: {memory_mb:.2f} MB")
 
-    
+
 def lemmatize(word: str): return LEMMA_MAP.get(word.lower().strip(), word.lower().strip())
 def similarity_score(w1: str, w2: str): return float((cosine_similarity([WORD_VECTORS[w1]], [WORD_VECTORS[w2]])[0][0] + 1) / 2)
 def get_progress_score(s: float):
