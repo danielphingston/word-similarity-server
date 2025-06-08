@@ -6,3 +6,4 @@ requests
 joblib
 inflect
 annoy
+sentence-transformers

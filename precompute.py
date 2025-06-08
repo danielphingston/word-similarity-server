@@ -1,8 +1,6 @@
 import json
 import numpy as np
-import gensim.downloader as api
-from nltk.stem import WordNetLemmatizer
-from nltk.corpus import brown, stopwords, wordnet
+from nltk.corpus import wordnet, stopwords
 from nltk.probability import FreqDist
 import nltk
 import os
@@ -10,70 +8,75 @@ import torch
 from tqdm import tqdm
 import joblib
 import inflect
-from annoy import AnnoyIndex # <-- IMPORT Annoy
+from annoy import AnnoyIndex
+from sentence_transformers import SentenceTransformer
 
 # --- Configuration ---
-MODEL_NAME = "glove-wiki-gigaword-300"
+MODEL_NAME = 'all-mpnet-base-v2'
+VECTOR_DIMENSIONS = 768 
 OUTPUT_VECTORS_PATH = "data/word_vectors.joblib"
+# ... (other output paths are the same)
 OUTPUT_VOCAB_PATH = "data/game_vocabulary.json"
 OUTPUT_LEMMA_MAP_PATH = "data/lemma_map.joblib"
 OUTPUT_COMMON_WORDS_PATH = "data/common_words.json"
 OUTPUT_ANTONYM_MAP_PATH = "data/antonym_map.joblib"
-# NEW: Path for our Annoy index for fast hint lookups
 OUTPUT_ANNOY_INDEX_PATH = "data/word_vectors.ann"
-# NEW: Path for mapping Annoy IDs back to words
 OUTPUT_ID_TO_WORD_PATH = "data/id_to_word.json"
+COMPRESSION_LEVEL = 0
 
-VECTOR_DIMENSIONS = 300 # Must match the model
 MIN_WORD_LENGTH = 3
 MAX_WORD_LENGTH = 10
 NUM_COMMON_WORDS_TO_SKIP = 250
 
 def precompute_all():
-    # ... (Steps 1-5 are the same as before) ...
-    print("="*50); print("  Starting Full Precomputation Pipeline"); print("="*50)
-    print("\nStep 1: NLTK Corpora..."); nltk.download('brown', quiet=True); nltk.download('wordnet', quiet=True); nltk.download('stopwords', quiet=True)
-    print(f"\nStep 2: Loading GloVe model '{MODEL_NAME}'..."); model = api.load(MODEL_NAME)
-    print("\nStep 3: Filtering vocabulary..."); english_stopwords = set(stopwords.words('english'))
-    initial_vocab = {w for w in model.index_to_key if w.isalpha() and w.isascii() and MIN_WORD_LENGTH <= len(w) <= MAX_WORD_LENGTH and w not in english_stopwords}
-    print(f"Found {len(initial_vocab)} suitable words.")
-    print("\nStep 4: Calculating frequencies..."); freq_dist = FreqDist(w.lower() for w in brown.words()); sorted_vocab = sorted(initial_vocab, key=lambda word: freq_dist[word], reverse=True)
-    final_game_words = set(sorted_vocab); print(f"Total game words considered: {len(final_game_words)}")
-    print("\nStep 5: Extracting vectors..."); p = inflect.engine()
-    word_vectors = {}; lemma_map = {}
-    for word in tqdm(final_game_words, desc="Extracting & Mapping"):
-        if word in model:
-            word_vectors[word] = model[word].astype(np.float16)
-            lemma_map[word] = word
-            plural = p.plural(word)
-            if plural and plural != word: lemma_map[plural] = word
-    print(f"Processed {len(word_vectors)} unique words.")
+    print("="*50); print("  Starting Final SBERT Precomputation Pipeline"); print("="*50)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'; print(f"Using device: {device.upper()}")
+    for corpus in ['wordnet', 'stopwords']: nltk.download(corpus, quiet=True)
+    
+    print(f"\nStep 1: Loading Sentence-BERT model '{MODEL_NAME}'...");
+    sbert_model = SentenceTransformer(MODEL_NAME, device=device)
+    
+    # =====================================================================
+    # CHANGE: Use the SBERT model's own vocabulary for a much richer word list
+    # =====================================================================
+    print("\nStep 2: Filtering the model's full vocabulary...")
+    # The tokenizer's vocab is the most reliable source of words the model knows.
+    model_vocab = sbert_model.tokenizer.get_vocab().keys()
+    english_stopwords = set(stopwords.words('english'))
+    
+    initial_vocab = {
+        word for word in model_vocab 
+        if word.isalpha() and word.isascii() and 
+        MIN_WORD_LENGTH <= len(word) <= MAX_WORD_LENGTH and 
+        word not in english_stopwords
+    }
+    print(f"Found {len(initial_vocab)} suitable words in the model's vocabulary.")
+
+    # We still use brown for frequency analysis as it's a balanced corpus
+    print("\nStep 3: Calculating word frequencies...")
+    freq_dist = FreqDist(w.lower() for w in nltk.corpus.brown.words())
+    sorted_vocab = sorted(list(initial_vocab), key=lambda word: freq_dist[word], reverse=True)
+    
+    print(f"\nStep 4: Generating {VECTOR_DIMENSIONS}-dimensional vectors with SBERT...")
+    embeddings = sbert_model.encode(sorted_vocab, show_progress_bar=True, convert_to_numpy=True)
+    word_vectors = {word: embeddings[i].astype(np.float16) for i, word in enumerate(sorted_vocab)}
     if "file" in word_vectors: del word_vectors["file"]
+    
     os.makedirs(os.path.dirname(OUTPUT_VECTORS_PATH), exist_ok=True)
     
-    # =====================================================================
-    # NEW Step 6: Build and save the Annoy index for fast searching
-    # =====================================================================
-    print("\nStep 6: Building Annoy index for fast hint searches...")
-    # Create mappings between integer IDs and words, which Annoy needs
+    print("\nStep 5: Building Annoy index and data maps...")
     word_to_id = {word: i for i, word in enumerate(word_vectors.keys())}
     id_to_word = {i: word for word, i in word_to_id.items()}
+    annoy_index = AnnoyIndex(VECTOR_DIMENSIONS, 'angular');
+    for i, word in id_to_word.items(): annoy_index.add_item(i, word_vectors[word])
+    annoy_index.build(100); annoy_index.save(OUTPUT_ANNOY_INDEX_PATH)
     
-    # Create and build the index
-    annoy_index = AnnoyIndex(VECTOR_DIMENSIONS, 'angular') # 'angular' is cosine similarity
-    for word, i in tqdm(word_to_id.items(), desc="Adding to Annoy Index"):
-        annoy_index.add_item(i, word_vectors[word])
-        
-    annoy_index.build(100) # 100 trees for a good balance of speed and accuracy
-    
-    # Save the index and the id->word map
-    annoy_index.save(OUTPUT_ANNOY_INDEX_PATH)
-    with open(OUTPUT_ID_TO_WORD_PATH, 'w') as f:
-        json.dump(id_to_word, f)
-    print(f"Saved Annoy index and ID map.")
-    
-    # ... (The rest of the script is the same, just re-numbered) ...
-    print("\nStep 7: Creating antonym map..."); antonym_map = {}
+    p = inflect.engine(); lemma_map = {}
+    for word in word_vectors.keys():
+        lemma_map[word] = word; plural = p.plural(word)
+        if plural != word: lemma_map[plural] = word
+
+    antonym_map = {}
     for word in tqdm(word_vectors.keys(), desc="Finding Antonyms"):
         antonyms = set()
         for syn in wordnet.synsets(word):
@@ -81,17 +84,23 @@ def precompute_all():
                 for ant in l.antonyms():
                     if ant.name() in word_vectors: antonyms.add(ant.name())
         if antonyms: antonym_map[word] = list(antonyms)
-    joblib.dump(antonym_map, OUTPUT_ANTONYM_MAP_PATH, compress=3, protocol=4)
 
-    print("\nStep 8: Saving final data files...")
-    joblib.dump(word_vectors, OUTPUT_VECTORS_PATH, compress=3, protocol=4)
-    joblib.dump(lemma_map, OUTPUT_LEMMA_MAP_PATH, compress=3, protocol=4)
+    print("\nStep 6: Saving final data files...")
+    joblib.dump(word_vectors, OUTPUT_VECTORS_PATH, compress=COMPRESSION_LEVEL, protocol=4)
+    joblib.dump(lemma_map, OUTPUT_LEMMA_MAP_PATH, compress=COMPRESSION_LEVEL, protocol=4)
+    joblib.dump(antonym_map, OUTPUT_ANTONYM_MAP_PATH, compress=COMPRESSION_LEVEL, protocol=4)
+    with open(OUTPUT_ID_TO_WORD_PATH, 'w') as f: json.dump(id_to_word, f)
+    
     common_words_to_skip = sorted_vocab[:NUM_COMMON_WORDS_TO_SKIP]
     with open(OUTPUT_COMMON_WORDS_PATH, 'w') as f: json.dump(common_words_to_skip, f)
-    final_word_buckets = {"easy": [w for w in sorted_vocab[:5000] if w in word_vectors], "medium": [w for w in sorted_vocab[5000:12000] if w in word_vectors], "hard": [w for w in sorted_vocab[12000:] if w in word_vectors]}
+    
+    easy_words = [w for w in sorted_vocab[:7000] if w in word_vectors]
+    medium_words = [w for w in sorted_vocab[7000:15000] if w in word_vectors]
+    hard_words = [w for w in sorted_vocab[15000:] if w in word_vectors]
+    final_word_buckets = {"easy": easy_words, "medium": medium_words, "hard": hard_words}
     with open(OUTPUT_VOCAB_PATH, 'w') as f: json.dump(final_word_buckets, f)
-        
-    print("✅ Precomputation complete!")
+    
+    print("\n" + "="*50); print("✅ Final Precomputation complete!"); print("="*50)
 
 if __name__ == "__main__":
     precompute_all()
