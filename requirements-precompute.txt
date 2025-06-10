@@ -7,3 +7,6 @@ joblib
 inflect
 annoy
 sentence-transformers
+transformers[torch]
+datasets
+wordfreq

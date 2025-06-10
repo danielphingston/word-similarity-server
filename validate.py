@@ -24,7 +24,7 @@ TEST_CASES = [
     ("student", "pupil", "High (Synonym)"),
     ("dog", "puppy", "High (Direct relationship)"),
     ("king", "queen", "High (Strongly related concepts)"),
-    ("idea", "thought", "High (Abstract synonym)"),
+    ("thought", "idea", "High (Abstract synonym)"),
 
     # --- Medium Similarity (Contextual & Functional Relationships) ---
     ("doctor", "hospital", "Medium (Person and Place)"),
