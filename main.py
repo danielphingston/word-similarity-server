@@ -13,6 +13,12 @@ from enum import Enum
 
 app = FastAPI()
 
+class CurveType(Enum):
+    GENEROUS = 1    # Fast start, slow finish. Good for encouragement.
+    LINEAR = 2      # Proportional progress. Fair and predictable.
+    CHALLENGING = 3 # Slow start, fast finish. Rewards precision.
+    S_CURVE = 4     # Natural feel: slow, then fast, then slow. Highly tunable.
+
 # --- Globals (Simplified) ---
 WORD_VECTORS: Dict[str, np.ndarray] = {}
 WORD_BUCKETS: Dict[str, List[str]] = {}
@@ -25,24 +31,20 @@ LEMMATIZATION_MAP: Dict[str, str] = {}
 # =====================================================================
 # FINAL SBERT GAMEPLAY TUNING CONSTANTS
 # =====================================================================
-SIMILARITY_FLOOR = 0.75
-SIMILARITY_CEILING = 0.93
-# PROGRESS_CURVE_POWER = .67
+def get_env_float(var_name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(var_name, default))
+    except (TypeError, ValueError):
+        return default
 
-# --- Parameters for each curve type ---
-GENEROUS_POWER = 0.67
-CHALLENGING_POWER = 1.5
-# S_CURVE_STEEPNESS controls how quickly the score accelerates in the middle.
-# Higher values make the jump from ~10 to ~90 points happen over a smaller similarity range.
-S_CURVE_STEEPNESS = 10.0
-
-HINT_IDEAL_MIN, HINT_IDEAL_MAX = 0.80, 0.90
-
-class CurveType(Enum):
-    GENEROUS = 1    # Fast start, slow finish. Good for encouragement.
-    LINEAR = 2      # Proportional progress. Fair and predictable.
-    CHALLENGING = 3 # Slow start, fast finish. Rewards precision.
-    S_CURVE = 4     # Natural feel: slow, then fast, then slow. Highly tunable.
+SIMILARITY_FLOOR = get_env_float("SIMILARITY_FLOOR", 0.75)
+SIMILARITY_CEILING = get_env_float("SIMILARITY_CEILING", 0.93)
+GENEROUS_POWER = get_env_float("GENEROUS_POWER", 0.67)
+CHALLENGING_POWER = get_env_float("CHALLENGING_POWER", 1.5)
+S_CURVE_STEEPNESS = get_env_float("S_CURVE_STEEPNESS", 10.0)
+HINT_IDEAL_MIN = get_env_float("HINT_IDEAL_MIN", 0.85)
+HINT_IDEAL_MAX = get_env_float("HINT_IDEAL_MAX", 0.90)
+DEFAULT_CURVE = os.environ.get("DEFAULT_CURVE", CurveType.S_CURVE)  # Default curve type for scoring
 
 @app.on_event("startup")
 def load_precomputed_data():
@@ -84,7 +86,7 @@ def similarity_score(w1: str, w2: str) -> float | None:
 
 def get_progress_score(
     similarity: float,
-    curve_type: CurveType = CurveType.S_CURVE # Default to the most versatile curve
+    curve_type: CurveType = DEFAULT_CURVE # Default to the most versatile curve
 ) -> int:
     """
     Calculates a gameplay score from 0-100 based on a raw similarity value.
