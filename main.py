@@ -135,10 +135,10 @@ def get_similarity(word1: str = Query(...), word2: str = Query(...)):
     secret_word_lemma = word2.strip().lower()
     
     # 2. Basic validation on the raw input
-    if len(player_guess_raw) < 3:
+    if len(player_guess_raw) < 4:
         return {
             "similarity": -1, "progress_score": 0, "isValidGuess": False,
-            "reason": "Words must be at least 3 characters long."
+            "reason": "Words must be at least 4 characters long."
         }
 
     # 3. Check if the *lemmatized* guess is a valid game word
