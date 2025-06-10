@@ -37,6 +37,8 @@ def get_env_float(var_name: str, default: float) -> float:
     except (TypeError, ValueError):
         return default
 
+_default_curve_env = os.environ.get("DEFAULT_CURVE")
+
 SIMILARITY_FLOOR = get_env_float("SIMILARITY_FLOOR", 0.75)
 SIMILARITY_CEILING = get_env_float("SIMILARITY_CEILING", 0.93)
 GENEROUS_POWER = get_env_float("GENEROUS_POWER", 0.67)
@@ -44,7 +46,14 @@ CHALLENGING_POWER = get_env_float("CHALLENGING_POWER", 1.5)
 S_CURVE_STEEPNESS = get_env_float("S_CURVE_STEEPNESS", 10.0)
 HINT_IDEAL_MIN = get_env_float("HINT_IDEAL_MIN", 0.85)
 HINT_IDEAL_MAX = get_env_float("HINT_IDEAL_MAX", 0.90)
-DEFAULT_CURVE = os.environ.get("DEFAULT_CURVE", CurveType.S_CURVE)  # Default curve type for scoring
+DEFAULT_CURVE = CurveType.S_CURVE
+
+if _default_curve_env is not None:
+    try:
+        DEFAULT_CURVE = CurveType[_default_curve_env]
+    except KeyError:
+        DEFAULT_CURVE = CurveType.S_CURVE      
+
 
 @app.on_event("startup")
 def load_precomputed_data():
@@ -187,7 +196,7 @@ def get_hint(data: HintRequest):
     exclude_words.add(target_word)
 
     target_vector = WORD_VECTORS[target_word]
-    neighbor_ids = ANNOY_INDEX.get_nns_by_vector(target_vector, 200)
+    neighbor_ids = ANNOY_INDEX.get_nns_by_vector(target_vector, 2000)
 
     ideal_candidates, all_candidates = [], []
     for item_id in neighbor_ids:
