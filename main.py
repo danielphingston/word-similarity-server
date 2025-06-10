@@ -201,7 +201,7 @@ def get_hint(data: HintRequest):
                 ideal_candidates.append(hint_data)
 
     if ideal_candidates: return random.choice(ideal_candidates)
-    if all_candidates: return all_candidates[0]
+    if all_candidates: return random.choice(all_candidates[:10])
     return {"hint": None, "reason": "no usable hint found"}
 
 @app.get("/")
